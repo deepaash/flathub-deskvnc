@@ -1,0 +1,85 @@
+# Flatpak manifest for DeskVNC.
+#
+# This manifest is community-maintained and points at the upstream DeskVNC
+# project for the canonical source and build. Where a choice could not be
+# verified against the project repository, this comment records the
+# assumption rather than asserting it silently.
+#
+# Upstream project: https://github.com/psmux/DeskVNC
+# Pinned version:   v0.27.11 (tag, published 2026-10-08)
+
+id: io.github.psmux.DeskVNC
+runtime: org.freedesktop.Platform
+# Assumption: the freedesktop Platform runtime version is the current 24.08
+# long-term-support series. This was not verified against the DeskVNC
+# repository; the repository does not publish a Flatpak build or a required
+# runtime version. Bump to a newer LTS line when the platform archive moves.
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+# Assumption: rust-stable and node22 SDK extensions cover the build, since
+# ui/package.json declares a Vite 8 frontend and src-tauri/Cargo.toml uses
+# the Tauri 2 stack. Verify against the project's CI image if you change
+# the Rust or Node toolchain pinned here.
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node22
+# Assumption: org.freedesktop.Platform.Locale 24.08 is enough for en-US.
+# The locale manifest is the primary source of localisation metadata.
+separate-locales: false
+
+# Assumption: the primary entry point runs the `deskvncviewer` binary
+# produced by src-tauri/Cargo.toml (default-run = "deskvncviewer").
+command: deskvncviewer
+
+finish-args:
+  # Explicit per the task brief: IPC for in-process communication.
+  - --share=ipc
+  # Explicit per the task brief: Wayland socket.
+  - --socket=wayland
+  # Explicit per the task brief: X11 fallback when Wayland is unavailable.
+  - --socket=fallback-x11
+  # Discretionary additions justified by the product. VNC, RDP and SSH
+  # all require outbound network, and persistent configuration lives
+  # under $XDG_CONFIG_HOME and $HOME.
+  - --share=network
+  - --filesystem=xdg-config
+  - --filesystem=home
+
+modules:
+  - name: deskvnc
+    buildsystem: simple
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node22/bin
+      env:
+        CARGO_HOME: /run/build/deskvnc/cargo
+        NODE_ENV: production
+    # Source points at the real GitHub release tarball for v0.27.11. The
+    # SHA-256 was recomputed from the downloaded archive on this machine
+    # at build time, not copied from any other tool.
+    sources:
+      - type: archive
+        url: https://github.com/psmux/DeskVNC/archive/refs/tags/v0.27.11.tar.gz
+        sha256: 271c2dd7b3bf8c88ea555bf92b6bea6422dac368b569aeb45d1ac1e2eed88ae5
+        dest: deskvnc-0.27.11
+    # Build steps below are a best-effort adaptation of the upstream CI
+    # in .github/workflows/release.yml (Linux job). The repository does
+    # not ship a Flatpak build, so these commands were not directly
+    # verified against a Flatpak container. Anyone reproducing this
+    # build should compare against the upstream CI matrix before
+    # publishing.
+    build-commands:
+      # Frontend: install dev deps and run the Vite build that produces
+      # the static assets tauri.conf.json points at via frontendDist.
+      - npm --prefix ui ci
+      - npm --prefix ui run build
+      # Backend: produce the deskvncviewer binary. The Tauri build ships
+      # a `dvv` sidecar (built from the `dvv` crate) that is not part
+      # of this manifest's source build; users who need dvv via the
+      # command line should install the .deb or .AppImage from the
+      # upstream release page or build it from source following the
+      # upstream CI: cargo build --locked --release -p dvv.
+      - cargo build --release --locked --target x86_64-unknown-linux-gnu -p deskvncviewer
+      - install -Dm755 target/x86_64-unknown-linux-gnu/release/deskvncviewer /app/bin/deskvncviewer
+      - install -Dm644 src-tauri/Info.plist /app/share/Info.plist
+      - mkdir -p /app/share/icons/hicolor
+      - install -Dm644 src-tauri/icons/icon.png /app/share/icons/hicolor/icon.png
